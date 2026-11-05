@@ -1,85 +1,114 @@
-/**
- * 공공데이터포털 행정안전부 일반음식점 API -> 대전 중구 영업 업소 snapshot
- * API 스키마/페이지 매개변수는 제공기관 변경에 따라 조정 필요.
- * 불완전 수집 시 기존 snapshot 절대 덮어쓰지 않음.
+/** 대전광역시 중구 음식점 정보 (ODCLOUD 2025-11-27 자료)
+ * GitHub Secret DATA_GO_KR_KEY = 공공데이터포털 Decoding 인증키
+ * 정확한 데이터 컬럼은 API 응답에 따라 자동 인식하며, 모르는 필드는 원본 정보로 함께 보관.
  */
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-const ROOT=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const envFile=path.join(ROOT,'.env');
-try { const s=await fs.readFile(envFile,'utf8'); for(const line of s.split(/\r?\n/)){const m=line.match(/^\s*([A-Za-z_][\w]*)\s*=\s*(.*)\s*$/);if(m && !process.env[m[1]])process.env[m[1]]=m[2].replace(/^['"]|['"]$/g,'');} } catch {}
-const key=process.env.DATA_GO_KR_KEY;
-if(!key || key.includes('여기에_')){console.error('DATA_GO_KR_KEY가 없습니다. .env 파일을 설정하세요.');process.exit(1);}
-const BASE=process.env.API_URL||'https://apis.data.go.kr/1741000/general_restaurants/info';
-const PAGE_SIZE=Math.max(1,Number(process.env.PAGE_SIZE)||1000);
-const MAX_PAGES=Math.max(1,Number(process.env.MAX_PAGES)||10000);
-const DELAY=Math.max(0,Number(process.env.REQUEST_DELAY_MS)||180);
-const pause=t=>new Promise(r=>setTimeout(r,t));
-const val=(o,...keys)=>{for(const k of keys){if(o?.[k]!=null && String(o[k]).trim()) return String(o[k]).trim();}return ''};
-const firstArray=obj=>{
-  if(Array.isArray(obj))return obj;
-  if(!obj||typeof obj!=='object')return null;
-  for(const key of ['data','items','item','row','rows','list','result','body','response','results']){const a=firstArray(obj[key]);if(a)return a;}
-  for(const v of Object.values(obj)){if(v&&typeof v==='object'){const a=firstArray(v);if(a)return a;}}
-  return null;
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+try {
+  const env = await fs.readFile(path.join(ROOT, '.env'), 'utf8');
+  for (const line of env.split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Za-z_][\w]*)\s*=\s*(.*?)\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
+  }
+} catch { /* GitHub Actions uses Secrets */ }
+
+const key = process.env.DATA_GO_KR_KEY?.trim();
+if (!key || key.includes('여기에_')) throw new Error('DATA_GO_KR_KEY를 GitHub Actions Secrets에 등록하세요.');
+const BASE = process.env.API_URL || 'https://api.odcloud.kr/api/3033892/v1/uddi:4c91d0b7-3e9a-4c3b-b61f-fde6f3bd97e7';
+const PAGE_SIZE = Math.max(1, Math.min(1000, Number(process.env.PAGE_SIZE) || 1000));
+const MAX_PAGES = Math.max(1, Number(process.env.MAX_PAGES) || 10000);
+const DELAY = Math.max(0, Number(process.env.REQUEST_DELAY_MS) || 180);
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+const clean = value => value === null || value === undefined ? '' : String(value).trim();
+const get = (row, keys) => {
+  for (const name of keys) {
+    const exact = row[name];
+    if (clean(exact)) return clean(exact);
+  }
+  const normalized = Object.entries(row).map(([k, v]) => [k.replace(/[\s_()·\-]/g, '').toLowerCase(), v]);
+  for (const name of keys) {
+    const match = normalized.find(([k]) => k === name.replace(/[\s_()·\-]/g, '').toLowerCase());
+    if (match && clean(match[1])) return clean(match[1]);
+  }
+  return '';
 };
-const deepCount=(obj,depth=0)=>{
- if(!obj||typeof obj!=='object'||depth>6)return null;
- for(const k of ['totalCount','total_count','totalCnt','total','totalRecords'])if(obj[k]!==undefined && Number.isFinite(Number(obj[k])))return Number(obj[k]);
- for(const k of ['response','body','result','data','header']){const n=deepCount(obj[k],depth+1);if(n!=null)return n;} return null;
-};
-function normalize(r){
- const name=val(r,'bplcNm','BPLCNM','siteWhlNm','SITEWHLNM','업소명','사업장명','사업장명칭','name','shopName');
- const address=val(r,'rdnWhlAddr','RDNWHLADDR','rdnwhladdr','siteWhlAddr','SITEWHLADDR','sitewhladdr','도로명전체주소','소재지전체주소','소재지도로명주소','소재지주소','address');
- const status=val(r,'dtlstatenm','DTLSTATENM','dtlStateNm','trdStateNm','TRDSTATENM','영업상태명','영업상태','status');
- const category=val(r,'uptaeNm','UPTAENM','uptaenm','업태구분명','업태명','category')||'일반음식점';
- const number=val(r,'mgtNo','MGTNO','관리번호','id');
- const phone=val(r,'siteTel','SITETEL','전화번호','phone');
- return {id:number||`${name}|${address}`,name,address,category,status,phone};
+
+function normalize(row, index) {
+  const name = get(row, ['업소명','업체명','사업장명','음식점명','상호명','상호','가게명','업소 명','소재지명','bplcNm','name']);
+  const address = get(row, ['도로명주소','도로명 주소','소재지도로명주소','소재지전체주소','주소','소재지','사업장소재지','지번주소','영업소주소','소재지주소','소재지(도로명)','rdnWhlAddr','siteWhlAddr','address']);
+  const category = get(row, ['업태명','업종','업태','업종명','업태구분명','음식종류','음식점분류','분류','uptaeNm']) || '일반음식점';
+  const phone = get(row, ['전화번호','연락처','전화','소재지전화','업소전화번호','siteTel']);
+  const status = get(row, ['영업상태','영업상태명','상태','상세영업상태명','영업여부','trdStateNm']);
+  const id = get(row, ['관리번호','인허가번호','번호','순번','연번','id']) || `${name}|${address}|${index}`;
+  return {id,name,address,category,phone,status};
 }
-function belongs(x){return /대전(광역시)?\s*(중구)/.test(x.address) || /대전광역시 중구/.test(x.address);}
-function isOpen(x){if(!x.status)return true; if(/폐업|취소|말소|정지|휴업|종료|폐쇄/.test(x.status))return false;return true;}
-async function requestPage(page){
- const url=new URL(BASE);
- // 행안부 API의 Swagger /info 요청 규격; provider-specific parameters can be set above.
- url.searchParams.set('serviceKey',key);
- url.searchParams.set('pageNo',String(page));
- url.searchParams.set('numOfRows',String(PAGE_SIZE));
- url.searchParams.set('type','json');
- const regionField=process.env.API_REGION_FIELD;
- if(regionField && process.env.API_REGION_VALUE)url.searchParams.set(regionField,process.env.API_REGION_VALUE);
- for(let tries=0;tries<3;tries++){
-  const ctrl=new AbortController();const timeout=setTimeout(()=>ctrl.abort(),35000);
-  try{
-   const resp=await fetch(url,{signal:ctrl.signal,headers:{Accept:'application/json'}});
-   const text=await resp.text();
-   if(!resp.ok)throw Error(`API HTTP ${resp.status}: ${text.slice(0,180)}`);
-   let json;try{json=JSON.parse(text)}catch{throw Error(`JSON 응답이 아닙니다. API 응답형식/키 확인: ${text.slice(0,180)}`)}
-   if(json?.response?.header?.resultCode && !['00','0','NORMAL_SERVICE'].includes(String(json.response.header.resultCode)))throw Error(`API 오류: ${json.response.header.resultMsg||json.response.header.resultCode}`);
-   const arr=firstArray(json);
-   if(!arr)throw Error(`응답에서 목록 배열을 찾지 못했습니다. 응답 필드: ${Object.keys(json).join(', ')}`);
-   return {items:arr,total:deepCount(json)};
-  }catch(e){if(tries===2)throw e;console.log(`  재시도 ${tries+1}: ${e.message}`);await pause(1200*(tries+1));}
-  finally{clearTimeout(timeout);}
- }
+function isActive(r) {
+  return !/폐업|말소|취소|종료|폐쇄|휴업|영업정지/.test(r.status);
 }
-const seen=new Map();let total=null;let count=0;let pages=0;let completed=false;
-console.log('행안부 공공데이터 일반음식점 API 수집 시작 (대전 중구 필터)');
-for(let page=1;page<=MAX_PAGES;page++){
- const {items,total:t}=await requestPage(page); pages=page;count+=items.length;
- if(t!=null)total=t;
- for(const raw of items){const r=normalize(raw);if(!r.name||!belongs(r)||!isOpen(r))continue;seen.set(r.id,r);}
- if(page===1) console.log(`  첫 페이지 ${items.length}건, 전체 건수 ${total??'미제공'}`);
- if(page%10===0)console.log(`  ${page}페이지 / ${count}건 검사 / 중구 ${seen.size}건`);
- if(items.length===0 || (total!=null&&count>=total) || items.length<PAGE_SIZE){completed=true;break;}
- await pause(DELAY);
+async function requestPage(page) {
+  const url = new URL(BASE);
+  url.searchParams.set('page', String(page));
+  url.searchParams.set('perPage', String(PAGE_SIZE));
+  url.searchParams.set('returnType', 'JSON');
+  url.searchParams.set('serviceKey', key);
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    try {
+      const response = await fetch(url, {signal: AbortSignal.timeout(45000), headers: {Accept:'application/json'}});
+      const body = await response.text();
+      if (!response.ok) {
+        const err = new Error(`API HTTP ${response.status}: ${body.slice(0, 250)}`);
+        if (response.status >= 400 && response.status < 500 && response.status !== 429) throw Object.assign(err,{nonRetryable:true});
+        throw err;
+      }
+      let json;
+      try { json = JSON.parse(body); } catch { throw Error(`JSON 응답이 아닙니다: ${body.slice(0,180)}`); }
+      if (!Array.isArray(json.data)) throw Error(`ODCLOUD 응답에 data 배열이 없습니다. 필드: ${Object.keys(json).join(', ')}`);
+      return {items:json.data, total:Number.isFinite(Number(json.totalCount)) ? Number(json.totalCount) : null};
+    } catch (error) {
+      if (error.nonRetryable || attempt === 4) throw error;
+      console.log(`페이지 ${page} 재시도 ${attempt}/3: ${error.message}`);
+      await sleep(attempt * 1500);
+    }
+  }
 }
-if(!completed)throw Error(`MAX_PAGES=${MAX_PAGES} 도달. 완전한 목록이 아니므로 기존 데이터를 유지합니다.`);
-const restaurants=[...seen.values()].sort((a,b)=>a.name.localeCompare(b.name,'ko'));
-if(!restaurants.length)throw Error('대전 중구 음식점이 0건입니다. API 응답 필드와 주소 필터를 확인하세요. 기존 데이터를 보존합니다.');
-const result={updatedAt:new Date().toISOString(),complete:true,total:restaurants.length,scannedPages:pages,scannedRecords:count,source:'행정안전부_식품_일반음식점 조회서비스 (공공데이터포털)',restaurants};
-const out=path.join(ROOT,'public','restaurants.json');
-await fs.writeFile(out+'.tmp',JSON.stringify(result,null,2),'utf8');
-await fs.rename(out+'.tmp',out);
-console.log(`완료! 대전 중구 음식점 ${restaurants.length}개 저장: public/restaurants.json`);
+
+const rows = [];
+let scanned = 0, pages = 0, total = null, complete = false;
+console.log('대전광역시 중구 음식점 정보 ODCLOUD API 수집 시작 (2025-11-27 자료)');
+for (let page = 1; page <= MAX_PAGES; page++) {
+  const result = await requestPage(page);
+  const {items} = result;
+  pages = page;
+  if (result.total !== null) total = result.total;
+  if (page === 1) {
+    console.log(`첫 페이지 ${items.length}건 / 전체 ${total ?? '미표시'}건`);
+    if (items[0]) console.log('실제 응답 컬럼:', Object.keys(items[0]).join(', '));
+  }
+  rows.push(...items);
+  scanned += items.length;
+  if (page % 10 === 0) console.log(`${page}페이지, 누적 ${scanned}건`);
+  if (items.length === 0 || (total !== null && scanned >= total) || items.length < PAGE_SIZE) { complete = true; break; }
+  await sleep(DELAY);
+}
+if (!complete) throw Error('모든 페이지를 읽지 못했습니다. 기존 JSON 파일을 보존합니다.');
+if (!rows.length) throw Error('API 결과가 0건입니다. 기존 JSON 파일을 보존합니다.');
+
+const seen = new Map();
+for (let i=0;i<rows.length;i++) {
+  const raw = rows[i];
+  const record = normalize(raw,i);
+  if (!record.name || !isActive(record)) continue;
+  // 이 API 자체가 중구 전용 자료이므로, 주소에 '대전 중구'가 생략되어도 제외하지 않습니다.
+  seen.set(`${record.name}|${record.address}`, record);
+}
+const restaurants = [...seen.values()].sort((a,b)=>a.name.localeCompare(b.name,'ko'));
+if (!restaurants.length) throw Error('업소명 컬럼을 인식하지 못했습니다. Actions 로그의 실제 응답 컬럼을 확인하세요. 기존 데이터를 보존합니다.');
+const result = {updatedAt:new Date().toISOString(),complete:true,total:restaurants.length,scannedPages:pages,scannedRecords:scanned,source:'대전광역시 중구 음식점 정보 (ODCLOUD 2025-11-27)',restaurants};
+const target = path.join(ROOT,'public','restaurants.json');
+await fs.mkdir(path.dirname(target),{recursive:true});
+await fs.writeFile(`${target}.tmp`,JSON.stringify(result,null,2),'utf8');
+await fs.rename(`${target}.tmp`,target);
+console.log(`수집 완료: ${restaurants.length}개 음식점 / public/restaurants.json`);
